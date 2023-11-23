@@ -1,0 +1,197 @@
+#--------------------------------------------------------------------------------------------------------------------------
+# DASHBOARD DEL UPVIC
+#
+# AUTORES: PABLO MARCHESI Y PABLO CHEDAS
+#
+# FEBRERO 2023
+#
+#--------------------------------------------------------------------------------------------------------------------------
+# RESUMEN DE LOS DATOS
+#
+# key_stats: resumen de los retornos del portfolio
+# pos_summary: resumen de la posicion actual en euros y por instrumento
+# cash_summary: resumen de la liquidez del portfolio en varias divisas
+# open_pos: posiciones abiertas actualmente (en su divisa)
+# risk: metricas de riesgo del portafolio
+# perf: retorno acumulado del portafolio
+# perf_symb: analisis de la rentabilidad de los activos del portfolio (incluidos los que se vendieron)
+# bm_t, bm_m, bm_q, bm_y: comparacion de los retornos acumulados del portfolio con los benchmarks (para un periodo dado). NO ESTÁ EN EL EXCEL
+# trade: resumen de las operaciones de la cuenta (faltan las fechas de compra y venta que no se donde encontrarlas)
+# rets: retornos diarios del portafolio y de los benchmarks
+# fixed_summary: resumen de la renta fija del portfolio
+#
+#--------------------------------------------------------------------------------------------------------------------------
+
+
+# PIP AND IMPORTS
+!pip install yfinance
+!pip install pygsheets
+!pip install pandas
+!pip install numpy
+!pip install pandas_market_calendars
+
+import yfinance as yf
+import numpy as np
+import pandas as pd
+from google.colab import drive
+from google.colab import auth
+import pygsheets
+from datetime import datetime
+import pandas_market_calendars as mcal
+from datetime import datetime, timedelta
+
+# CREATE A CALENDAR
+nyse = mcal.get_calendar('NYSE')
+days = nyse.schedule(start_date='2023-01-19',end_date='2023-12-30')
+
+
+# SET DRIVE
+drive.mount('/content/drive/')
+gc = pygsheets.authorize(service_file='/content/drive/MyDrive/Credenciales_API.json')
+sh = gc.open_by_key('mysecretkey')
+
+
+# READ EXCEL
+df = pd.read_excel(f"/content/drive/MyDrive/Reports/report_17nov.xlsx",header = None)
+df.set_index(df.columns[0],inplace = True)
+
+
+# KEY STATS
+key_stats = df.loc['Key Statistics'][1:]
+key_stats.rename(columns = key_stats.iloc[0,:], inplace = True)
+key_stats = key_stats.iloc[1:,:].reset_index(drop = True).dropna(axis = 1)
+key_stats['P&L'] = key_stats['EndingNAV']-key_stats['Deposits/Withdrawals']
+key_stats['P&L %'] = (key_stats['EndingNAV']/key_stats['Deposits/Withdrawals'])-1 #ESTO LO HAY QUE DIVIDIR ENTRE 100
+
+
+# POSITIONS SUMMARY, CASH SUMMARY & OPEN POSITIONS
+pos = df.loc['Open Position Summary'][1:]
+pos.rename(columns = pos.iloc[0,:], inplace = True)
+pos = pos.iloc[1:,:].reset_index(drop = True)
+
+cash_summary = pos.loc[pos['FinancialInstrument'] == 'Cash'][['Date','Currency','Quantity','ClosePrice','Value']].reset_index(drop = True)
+pos_summary = pos.loc[(pos['Date'] == 'Total')&(pos['Currency']!= 'USD')].loc[:, ['FinancialInstrument','Currency','Value','Cost Basis', 'UnrealizedP&L']].reset_index(drop = True)
+open_pos = pos.loc[(pos['Date'] != 'Total')&(pos['FinancialInstrument'] != 'Cash')].reset_index(drop=True).dropna(axis = 1)
+open_pos['UnrealizedP&L (%)'] = open_pos['UnrealizedP&L']/open_pos['Cost Basis']
+
+
+# RISK MEASURES
+risk = df.loc['Risk Measures'][1:]
+risk.rename(columns = risk.iloc[0,:],inplace=True)
+risk = risk.iloc[1:,:].reset_index(drop = True)
+risk = risk.loc[:,['RiskRatio','AccountReturn']]
+risk = risk.transpose().reset_index(drop = True)
+risk.rename(columns = risk.iloc[0,:], inplace= True)
+risk = risk.drop(0)
+
+# CUMULATIVE PERFORMANCE
+perf = df.loc['Cumulative Performance Statistics'][1:]
+perf.rename(columns = perf.iloc[0,:],inplace=True)
+perf = perf.iloc[1:,:].reset_index(drop = True)
+#----------------------------------------------------------------------------------------------
+today = datetime.today().strftime("%m/%d/%Y")
+time = days.loc[:today]
+idx_time = time.index
+l = len(perf) - len(idx_time)
+perf = perf.iloc[l:,:]
+perf['Date'] = idx_time
+#----------------------------------------------------------------------------------------------
+perf['Return'] = perf['Return']/100
+perf = perf[['Date','Return']]
+# perf = perf.drop(perf.index[-1]) #La ultima fila es el retorno de hoy (no lo queremos)
+
+# PERFORMANCE BY SYMBOL
+perf_symb = df.loc['Performance by Symbol'][1:]
+perf_symb.rename(columns = perf_symb.iloc[0,:], inplace= True)
+perf_symb = perf_symb.iloc[1:,:].reset_index(drop = True)
+
+idx =  perf_symb.loc[:,['Description']].dropna().index #Filtramos para quedarnos con los valores y cash
+perf_symb = perf_symb.loc[idx].dropna(axis = 1)
+
+
+# BENCHMARK SUMMARY
+bm = df.loc['Historical Performance Benchmark Comparison']
+bm = bm.iloc[1:,:].reset_index(drop = True).dropna(axis = 1)
+bm.rename(columns = bm.iloc[0,:], inplace = True)
+bm = bm.iloc[1:,:].reset_index(drop = True)
+
+
+# TRADE SUMMARY
+trade = df.loc['Trade Summary'][1:]
+trade.rename(columns = trade.iloc[0,:], inplace= True)
+trade = trade.iloc[1:,:].reset_index(drop = True)
+
+
+# DAILY BENCHMARK & PORTFOLIO RETURNS
+rets = df.loc['Time Period Benchmark Comparison'][1:]
+rets.rename(columns = rets.iloc[0,:], inplace= True)
+rets = rets.iloc[1:,:].reset_index(drop = True).dropna(axis = 1)
+
+
+# FIXED INCOME
+fixed = df.loc['Fixed Income'][1:]
+fixed = fixed.reset_index(drop=True).transpose()
+fixed.rename(columns = fixed.iloc[0,:], inplace= True)
+fixed = fixed.iloc[1:,:].reset_index(drop = True)
+fixed_summary = fixed['Fixed Income Summary'].dropna()
+
+
+#--------------------------------------------------------------------------------------------------------------------------
+# PLOTS
+#--------------------------------------------------------------------------------------------------------------------------
+
+# PIE CHART & SECTOR ALLOCATION
+pie_chart = open_pos[['Description','Value']]
+pie_chart['Value'] = open_pos['FXRateToBase']*pie_chart['Value']
+eur = cash_summary.iloc[-1,-1] #Asumimos que el total de cash en euros está en la esquina inferior
+pie_chart.loc[-1] = ['Cash',eur]
+pie_chart.reset_index(drop = True)
+
+pie_chart['FinancialInstrument'] = open_pos['FinancialInstrument']
+pie_chart['Sector'] = open_pos['Sector']
+pie_chart = pie_chart.fillna('Cash')
+pie_chart['Description'][0] = 'US Treasuries'
+
+
+# BENCHMARK
+
+bm_rets = pd.DataFrame({'IBEX35':rets['BM1Return'], 'NDX':rets['BM2Return'], 'SPX':rets['BM3Return'], 'PORTFOLIO':rets['U11259084Return']})
+bm_rets['IBEX35'] = np.cumprod(1+(bm_rets['IBEX35'].to_numpy())/100)-1
+bm_rets['NDX'] = np.cumprod(1+(bm_rets['NDX'].to_numpy())/100)-1
+bm_rets['SPX'] = np.cumprod(1+(bm_rets['SPX'].to_numpy())/100)-1
+bm_rets['PORTFOLIO'] = np.cumprod(1+(bm_rets['PORTFOLIO'].to_numpy())/100)-1
+l = len(bm_rets) - len(idx_time)
+bm_rets = bm_rets.iloc[l:,:]
+bm_rets.insert(0,'Date',idx_time)
+
+#--------------------------------------------------------------------------------------------------------------------------
+# SHEETS
+#--------------------------------------------------------------------------------------------------------------------------
+
+# ADD SHEETS
+# sh.add_worksheet("Key Stats")
+# sh.add_worksheet("Cash Summary")
+# sh.add_worksheet("Position Summary")
+# sh.add_worksheet("Open Positions")
+# sh.add_worksheet("Risk")
+# sh.add_worksheet("Cumulative Performance")
+# sh.add_worksheet("Performance by Symbol")
+# sh.add_worksheet("Benchmark Summary")
+# sh.add_worksheet("Trade Summary")
+# sh.add_worksheet("Daily Benchmark & Portfolio Returns")
+# sh.add_worksheet('Pie Chart')
+# sh.add_worksheet('Portfolio vs Benchmark')
+
+# WRITE SHEETS
+sh.worksheet_by_title("Key Stats").set_dataframe(key_stats,(0,0))
+sh.worksheet_by_title("Cash Summary").set_dataframe(cash_summary,(0,0))
+sh.worksheet_by_title("Position Summary").set_dataframe(pos_summary,(0,0))
+sh.worksheet_by_title("Open Positions").set_dataframe(open_pos,(0,0))
+sh.worksheet_by_title("Risk").set_dataframe(risk,(0,0))
+sh.worksheet_by_title("Cumulative Performance").set_dataframe(perf,(0,0))
+sh.worksheet_by_title("Performance by Symbol").set_dataframe(perf_symb,(0,0))
+sh.worksheet_by_title("Benchmark Summary").set_dataframe(bm,(0,0))
+sh.worksheet_by_title("Trade Summary").set_dataframe(trade,(0,0))
+sh.worksheet_by_title("Daily Benchmark & Portfolio Returns").set_dataframe(rets,(0,0))
+sh.worksheet_by_title("Pie Chart").set_dataframe(pie_chart,(0,0))
+sh.worksheet_by_title('Portfolio vs Benchmark').set_dataframe(bm_rets,(0,0))
